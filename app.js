@@ -481,21 +481,20 @@ function renderQ() {
   const opts = tf ? [["T", "Tak"], ["N", "Nie"]] : [["A", q.pl[1]], ["B", q.pl[2]], ["C", q.pl[3]]];
   const pct = S.i / S.qs.length * 100;
 
-  const media = phase === "read" ? mediaHTML(q, "idle")   // размыто, ждёт кнопки
-    : phase === "film" ? mediaHTML(q, "play")             // фильм, один раз
-      : exam && q.k === "v" ? mediaHTML(q, "frozen")      // стоп-кадр во время ответа
-        // в уроке фото видно сразу, а фильм ждёт кнопки — чтобы сперва прочитать вопрос
-        : mediaHTML(q, q.k === "v" ? "idle" : "shown");
+  // Фото видно сразу и целиком — прятать статичную картинку незачем.
+  // Размытие с кнопкой ▶ только у фильма, и это единственный элемент управления.
+  const media = q.k !== "v" ? mediaHTML(q, "shown")
+    : phase === "film" ? mediaHTML(q, "play")
+      : phase === "answer" && exam ? mediaHTML(q, "frozen")
+        : mediaHTML(q, "idle");
 
-  const bottom = phase === "read"
-    ? `<button class="btn blue" onclick="startMedia()">${q.k === "v" ? "Start — odtwórz film" : "Start"}</button>`
-    : phase === "film"
-      ? `<div class="dim center" style="font-size:14px;padding:6px">Film leci raz — patrz uważnie</div>`
-      : opts.map(([k, text], n) => `
-          <button class="opt" id="o${k}" onclick="answer('${k}',event)">
-            <span class="k">${tf ? (k === "T" ? "✓" : "✕") : k}</span>${esc(text)}
-            ${alt && !tf ? `<span class="oh">${esc(alt[n + 1])}</span>` : ""}
-          </button>`).join("");
+  // Варианты ответа видны всегда — иначе непонятно, что происходит,
+  // и нажатие на «Start» ощущается как пропуск вопроса.
+  const bottom = opts.map(([k, text], n) => `
+      <button class="opt" id="o${k}" onclick="answer('${k}',event)">
+        <span class="k">${tf ? (k === "T" ? "✓" : "✕") : k}</span>${esc(text)}
+        ${alt && !tf ? `<span class="oh">${esc(alt[n + 1])}</span>` : ""}
+      </button>`).join("");
 
   app.innerHTML = `
     <div class="lessonTop">
@@ -526,7 +525,8 @@ function renderQ() {
   if (q.k === "v" && phase !== "film") { const mv = $("med"); if (mv) mv.load(); }
 
   if (!exam) return;
-  if (phase === "read") startClock(EXAM.readSec, startMedia);
+  // Не тронул фильм за отведённое время — он запускается сам, как на экзамене
+  if (phase === "read") startClock(EXAM.readSec, q.k === "v" ? startMedia : toAnswer);
   else if (phase === "film") {
     const v = $("med");
     $("clock").textContent = "▶";                       // время фильма не тикает
