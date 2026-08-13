@@ -43,8 +43,8 @@ const dueIn = q => {
   return p ? (P.ans - (p.at || 0)) - DELAY[p.box] : Infinity;   // >=0 — пора показывать
 };
 
-function loadState() {
-  try { P = JSON.parse(localStorage.getItem(KEY)); } catch (e) { P = null; }
+function applyState(loaded) {
+  P = loaded;
   if (!P) {
     P = FRESH();
     try {                                   // перенос прогресса из первой версии
@@ -55,7 +55,13 @@ function loadState() {
   for (const [k, v] of Object.entries(FRESH())) if (P[k] === undefined) P[k] = v;
   rollDay();
 }
-const save = () => localStorage.setItem(KEY, JSON.stringify(P));
+// синхронная загрузка для браузера; в Telegram состояние доедет из облака
+function loadState() {
+  let local = null;
+  try { local = JSON.parse(localStorage.getItem(KEY)); } catch (e) { /* пусто */ }
+  applyState(local);
+}
+const save = () => Store.save(P);
 
 function rollDay() {
   const t = today();
@@ -216,6 +222,9 @@ function home() {
         <span class="ic">${plan ? "🎯" : "⚙️"}</span>${plan ? plan.left + " dni" : "ustaw"}
       </div>
     </div>
+    ${TG && tgUser() ? `<div class="dim" style="font-size:12px;margin:-8px 0 12px 4px">
+      ☁️ ${esc(tgUser().first_name || "")} — postęp zapisuje się w Telegramie
+      i jest ten sam na telefonie i na komputerze</div>` : ""}
 
     <div class="card">
       <div class="goal">
@@ -688,12 +697,33 @@ document.addEventListener("keydown", e => {
   }
 });
 
+/* ===================== Telegram ===================== */
+function initTelegram() {
+  if (!TG) return;
+  TG.ready();
+  TG.expand();
+  // без этого свайп вниз по списку вопросов закрывает приложение
+  if (TG.disableVerticalSwipes) TG.disableVerticalSwipes();
+  if (TG.setHeaderColor) TG.setHeaderColor("#0a0c12");
+  if (TG.setBackgroundColor) TG.setBackgroundColor("#0a0c12");
+  document.body.classList.add("in-tg");
+}
+
+const tgUser = () => (TG && TG.initDataUnsafe && TG.initDataUnsafe.user) || null;
+
 /* ===================== start ===================== */
+initTelegram();
 loadState();
-fetch("questions.json")
-  .then(r => r.json())
-  .then(d => { DATA = d.questions; TOPICS = d.topics; home(); })
-  .catch(() => {
-    app.innerHTML = `<div class="card">Nie wczytano <b>questions.json</b>.<br>
-      <span class="dim">Uruchom <code>python3 scripts/build_db.py</code>, potem <code>scripts/serve.sh</code></span></div>`;
-  });
+
+Promise.all([
+  fetch("questions.json").then(r => r.json()),
+  Store.load().catch(() => null),           // из облака Telegram, если мы внутри
+]).then(([d, stored]) => {
+  DATA = d.questions;
+  TOPICS = d.topics;
+  if (stored) applyState(stored);             // облако свежее локального — берём его
+  home();
+}).catch(() => {
+  app.innerHTML = `<div class="card">Nie wczytano <b>questions.json</b>.<br>
+    <span class="dim">Uruchom <code>python3 scripts/build_db.py</code>, potem <code>scripts/serve.sh</code></span></div>`;
+});
