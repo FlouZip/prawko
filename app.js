@@ -32,8 +32,16 @@ const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 864e5);
 /* ===================== stan ===================== */
 const FRESH = () => ({
   v: 2, xp: 0, streak: 0, best: 0, lastDay: null, goal: 50, examDate: null,
-  days: {}, q: {}, ach: [], sound: true, lang: "", recent: [],
+  days: {}, q: {}, ach: [], sound: true, lang: "", recent: [], ans: 0,
 });
+
+// Пауза перед повторным показом — в количестве ответов, а не в днях: учишься
+// пачками, и «через 3 дня» просто выкинуло бы вопрос из оборота. Индекс — коробка.
+const DELAY = [10, 30, 90, 250, 600, 1200];
+const dueIn = q => {
+  const p = P.q[q.id];
+  return p ? (P.ans - (p.at || 0)) - DELAY[p.box] : Infinity;   // >=0 — пора показывать
+};
 
 function loadState() {
   try { P = JSON.parse(localStorage.getItem(KEY)); } catch (e) { P = null; }
@@ -79,6 +87,8 @@ function mark(id, right) {
   p.seen++;
   if (right) p.box = Math.min(5, p.box + 1); else { p.box = 0; p.wrong++; }
   p.last = right ? 1 : 0;
+  P.ans = (P.ans || 0) + 1;
+  p.at = P.ans;                       // отметка «когда показывали» для паузы
   P.recent.push(right ? 1 : 0);
   if (P.recent.length > 100) P.recent.shift();
 }
@@ -359,13 +369,22 @@ function screenStats() {
 /* ===================== dobór pytań ===================== */
 function lessonQuestions(topic) {
   const pool = topic ? byTopic(topic) : DATA;
-  const weak = shuffle(weakOf(pool));
+  // «Отлежавшиеся» — те, у кого пауза после прошлого показа уже вышла.
+  const ripe = q => dueIn(q) >= 0;
+  const weak = shuffle(weakOf(pool).filter(ripe));
   const fresh = shuffle(freshOf(pool));
-  const rest = shuffle(pool.filter(q => (P.q[q.id]?.box || 0) >= MASTER_BOX));
-  // сначала ошибочные, потом новое, в конце — повторение уже освоенного
+  const rest = shuffle(pool.filter(q => (P.q[q.id]?.box || 0) >= MASTER_BOX).filter(ripe));
+
+  // половина урока — то, что валится, дальше новое, в конце повторение освоенного
   const out = weak.slice(0, Math.ceil(LESSON_LEN * .5));
   for (const src of [fresh, weak.slice(out.length), rest]) {
     for (const q of src) { if (out.length >= LESSON_LEN) break; if (!out.includes(q)) out.push(q); }
+  }
+  // если отлежавшихся не хватило на полный урок — добираем самыми давними,
+  // чтобы урок не оказался короче, но и не подсовывал только что отвеченное
+  if (out.length < LESSON_LEN) {
+    const back = pool.filter(q => !out.includes(q)).sort((a, b) => dueIn(b) - dueIn(a));
+    out.push(...back.slice(0, LESSON_LEN - out.length));
   }
   return shuffle(out);
 }
