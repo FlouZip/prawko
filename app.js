@@ -419,38 +419,46 @@ const clearTimer = () => {
   if (S.filmGuard) { clearTimeout(S.filmGuard); S.filmGuard = null; }
 };
 
-// Стоп-кадр: после фильма на экзамене на экране остаётся последний кадр,
-// по нему и отвечаешь. Файл уже в кэше, поэтому перемотка мгновенная.
-function frozenHTML(q) {
-  if (!q.k) return "";
-  const src = "media/" + encodeURIComponent(q.m);
-  const fallback = `this.parentNode.innerHTML='<div class=none>⚠️ nie wczytano pliku ${esc(q.m)}</div>'`;
-  return q.k === "v"
-    ? `<div class="media"><video src="${src}" muted playsinline preload="auto"
-         onloadeddata="this.currentTime=Math.max(0,this.duration-0.05)" onerror="${fallback}"></video></div>`
-    : `<div class="media"><img src="${src}" onerror="${fallback}"></div>`;
-}
-
-function mediaHTML(q) {
+/* Один медиа-блок на все случаи. Состояния:
+   idle   — размытое превью и кнопка ▶: сначала читаешь вопрос, смотришь когда готов
+   play   — фильм крутится, ровно один раз (самоповтор сбивает с мысли)
+   ended  — стоп-кадр и кнопка ↻ (на экзамене пересмотр недоступен)
+   frozen — сразу последний кадр: так экран выглядит на экзамене во время ответа  */
+function mediaHTML(q, state) {
   if (!q.k) return "";
   // 7% имён в каталоге министерства содержат пробелы и скобки — кодируем сами,
   // не полагаясь на браузер: 'MW 18(151,154).jpg' иначе даёт 404
   const src = "media/" + encodeURIComponent(q.m);
   const fallback = `this.parentNode.innerHTML='<div class=none>⚠️ nie wczytano pliku ${esc(q.m)}</div>'`;
-  // Видео играет РОВНО ОДИН раз: самопроизвольный повтор сбивает с мысли.
-  // Пересмотреть можно только осознанно — кнопкой, она появляется после конца.
-  return q.k === "v"
-    ? `<div class="media" id="medbox"><video id="med" src="${src}" muted playsinline autoplay
-         onended="document.getElementById('medbox').classList.add('ended')"
-         onerror="${fallback}"></video>
-       <button class="replay" onclick="replay()" title="Odtwórz ponownie">↻</button></div>`
-    : `<div class="media"><img src="${src}" onerror="${fallback}"></div>`;
+
+  if (q.k !== "v")
+    return `<div class="media ${state === "idle" ? "idle" : ""}" id="medbox">
+              <img src="${src}" onerror="${fallback}">
+              ${state === "idle" ? `<button class="playbtn" onclick="startMedia()"></button>` : ""}
+            </div>`;
+
+  const frozen = state === "frozen";
+  // Без перемотки браузер не рисует ни одного кадра и на месте видео чёрный
+  // прямоугольник — размывать нечего. Поэтому подталкиваем: idle к первому
+  // кадру, frozen к последнему (на экзамене отвечают по стоп-кадру).
+  const seek = frozen ? "Math.max(0,this.duration-0.05)" : state === "idle" ? "0.1" : null;
+  return `<div class="media ${state}" id="medbox">
+      <video id="med" src="${src}" muted playsinline preload="auto"
+        ${seek ? `onloadeddata="this.currentTime=${seek}"` : ""}
+        onplay="document.getElementById('medbox').className='media play'"
+        onended="document.getElementById('medbox').className='media ended'"
+        onerror="${fallback}"></video>
+      ${frozen ? "" : `<button class="playbtn" onclick="playFilm()"></button>`}
+    </div>`;
 }
 
-function replay() {
+// Снять размытие и пустить фильм. В уроке — просто смотрим, в экзамене
+// после фильма пойдёт отсчёт на ответ.
+function playFilm() {
   const v = $("med"), box = $("medbox");
   if (!v) return;
-  box.classList.remove("ended");
+  if (S.mode === "exam" && S.phase === "read") return startMedia();
+  box.className = "media play";
   v.currentTime = 0;
   v.play();
 }
@@ -473,10 +481,11 @@ function renderQ() {
   const opts = tf ? [["T", "Tak"], ["N", "Nie"]] : [["A", q.pl[1]], ["B", q.pl[2]], ["C", q.pl[3]]];
   const pct = S.i / S.qs.length * 100;
 
-  const media = phase === "read" ? ""                   // на ознакомлении медиа скрыто
-    : phase === "film" ? mediaHTML(q)                   // фильм, один раз
-      : exam && q.k === "v" ? frozenHTML(q)             // стоп-кадр после фильма
-        : mediaHTML(q);
+  const media = phase === "read" ? mediaHTML(q, "idle")   // размыто, ждёт кнопки
+    : phase === "film" ? mediaHTML(q, "play")             // фильм, один раз
+      : exam && q.k === "v" ? mediaHTML(q, "frozen")      // стоп-кадр во время ответа
+        // в уроке фото видно сразу, а фильм ждёт кнопки — чтобы сперва прочитать вопрос
+        : mediaHTML(q, q.k === "v" ? "idle" : "shown");
 
   const bottom = phase === "read"
     ? `<button class="btn blue" onclick="startMedia()">${q.k === "v" ? "Start — odtwórz film" : "Start"}</button>`
@@ -511,6 +520,10 @@ function renderQ() {
       <div class="msg"><b id="vt"></b><span id="vs"></span></div>
       <button class="btn" id="vb" onclick="next()">Dalej</button>
     </div></div>`;
+
+  // Chrome игнорирует preload="auto", пока видео не тронули: readyState остаётся 0,
+  // кадра нет и размывать нечего. Просим загрузку явно.
+  if (q.k === "v" && phase !== "film") { const mv = $("med"); if (mv) mv.load(); }
 
   if (!exam) return;
   if (phase === "read") startClock(EXAM.readSec, startMedia);
