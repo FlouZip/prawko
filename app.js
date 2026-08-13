@@ -396,10 +396,22 @@ function mediaHTML(q) {
   // не полагаясь на браузер: 'MW 18(151,154).jpg' иначе даёт 404
   const src = "media/" + encodeURIComponent(q.m);
   const fallback = `this.parentNode.innerHTML='<div class=none>⚠️ nie wczytano pliku ${esc(q.m)}</div>'`;
+  // Видео играет РОВНО ОДИН раз: самопроизвольный повтор сбивает с мысли.
+  // Пересмотреть можно только осознанно — кнопкой, она появляется после конца.
   return q.k === "v"
-    ? `<div class="media"><video id="med" src="${src}" muted playsinline autoplay
-         ${S.mode === "exam" ? "" : "loop"} onerror="${fallback}"></video></div>`
+    ? `<div class="media" id="medbox"><video id="med" src="${src}" muted playsinline autoplay
+         onended="document.getElementById('medbox').classList.add('ended')"
+         onerror="${fallback}"></video>
+       <button class="replay" onclick="replay()" title="Odtwórz ponownie">↻</button></div>`
     : `<div class="media"><img src="${src}" onerror="${fallback}"></div>`;
+}
+
+function replay() {
+  const v = $("med"), box = $("medbox");
+  if (!v) return;
+  box.classList.remove("ended");
+  v.currentTime = 0;
+  v.play();
 }
 
 function renderQ() {
