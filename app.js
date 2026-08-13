@@ -95,7 +95,12 @@ function mark(id, right) {
 
 /* ===================== метрики ===================== */
 const mastered = list => (list || DATA).filter(q => (P.q[q.id]?.box || 0) >= MASTER_BOX).length;
-const readiness = () => DATA.length ? mastered() / DATA.length : 0;
+// Готовность считаем дробно: вопрос закрывается тремя правильными подряд, и если
+// показывать только закрытые, шкала висит на нуле весь первый проход базы.
+// Один верный ответ = треть вопроса — видно, что работа идёт.
+const readiness = () => DATA.length
+  ? DATA.reduce((s, q) => s + Math.min(P.q[q.id]?.box || 0, MASTER_BOX) / MASTER_BOX, 0) / DATA.length
+  : 0;
 const accuracy = () => P.recent.length ? P.recent.reduce((a, b) => a + b, 0) / P.recent.length : 0;
 const weakOf = list => list.filter(q => { const b = P.q[q.id]; return b && b.box < MASTER_BOX; });
 const freshOf = list => list.filter(q => !P.q[q.id]);
@@ -250,8 +255,10 @@ function home() {
       </div>
       <div class="bar"><i style="width:${rd * 100}%"></i></div>
       <div class="dim" style="font-size:13px;margin-top:9px">
-        Opanowane ${mastered()} z ${DATA.length} pytań${P.recent.length >= 10
-      ? ` · skuteczność ostatnich ${P.recent.length}: <b class="${accuracy() >= .9 ? "ok-c" : "bad-c"}">${Math.round(accuracy() * 100)}%</b>` : ""}
+        Zaliczone na stałe: ${mastered()} z ${DATA.length}
+        <span style="opacity:.75">(pytanie zalicza się po 3 poprawnych z rzędu)</span>${P.recent.length >= 10
+      ? `<br>Skuteczność ostatnich ${P.recent.length} odpowiedzi:
+           <b class="${accuracy() >= .9 ? "ok-c" : "bad-c"}">${Math.round(accuracy() * 100)}%</b>` : ""}
       </div>
       ${plan ? `<div class="dim" style="font-size:13px;margin-top:6px">
         Do egzaminu ${plan.left} dni · zostało ${plan.todo} pytań ·
@@ -407,7 +414,22 @@ function startExam() {
 }
 
 let timer = null;
-const clearTimer = () => { if (timer) { clearInterval(timer); timer = null; } };
+const clearTimer = () => {
+  if (timer) { clearInterval(timer); timer = null; }
+  if (S.filmGuard) { clearTimeout(S.filmGuard); S.filmGuard = null; }
+};
+
+// Стоп-кадр: после фильма на экзамене на экране остаётся последний кадр,
+// по нему и отвечаешь. Файл уже в кэше, поэтому перемотка мгновенная.
+function frozenHTML(q) {
+  if (!q.k) return "";
+  const src = "media/" + encodeURIComponent(q.m);
+  const fallback = `this.parentNode.innerHTML='<div class=none>⚠️ nie wczytano pliku ${esc(q.m)}</div>'`;
+  return q.k === "v"
+    ? `<div class="media"><video src="${src}" muted playsinline preload="auto"
+         onloadeddata="this.currentTime=Math.max(0,this.duration-0.05)" onerror="${fallback}"></video></div>`
+    : `<div class="media"><img src="${src}" onerror="${fallback}"></div>`;
+}
 
 function mediaHTML(q) {
   if (!q.k) return "";
@@ -433,15 +455,38 @@ function replay() {
   v.play();
 }
 
+/* Экзамен идёт тремя этапами — как в WORD:
+   1) read   — только текст вопроса, 20 с, медиа ещё не показывают (кнопка START)
+   2) film   — фильм проигрывается ОДИН раз, его длительность в лимит не входит
+   3) answer — стоп-кадр (или фото) + варианты, 15 с
+   Специалистические идут одной фазой на 50 с — фильмов в них нет вовсе. */
 function renderQ() {
   clearTimer();
   toTop();
   if (S.i >= S.qs.length) return finish();
-  const q = S.qs[S.i], exam = S.mode === "exam", reading = exam && S.phase === "read";
+  const q = S.qs[S.i], exam = S.mode === "exam";
+  // у специалистических 50 с идут одной фазой — ознакомление и ответ вместе
+  if (exam && q.s === "s") S.phase = "answer";
+  const phase = exam ? S.phase : "answer";
   const alt = P.lang && q[P.lang] ? q[P.lang] : null;
   const tf = isTF(q);
   const opts = tf ? [["T", "Tak"], ["N", "Nie"]] : [["A", q.pl[1]], ["B", q.pl[2]], ["C", q.pl[3]]];
   const pct = S.i / S.qs.length * 100;
+
+  const media = phase === "read" ? ""                   // на ознакомлении медиа скрыто
+    : phase === "film" ? mediaHTML(q)                   // фильм, один раз
+      : exam && q.k === "v" ? frozenHTML(q)             // стоп-кадр после фильма
+        : mediaHTML(q);
+
+  const bottom = phase === "read"
+    ? `<button class="btn blue" onclick="startMedia()">${q.k === "v" ? "Start — odtwórz film" : "Start"}</button>`
+    : phase === "film"
+      ? `<div class="dim center" style="font-size:14px;padding:6px">Film leci raz — patrz uważnie</div>`
+      : opts.map(([k, text], n) => `
+          <button class="opt" id="o${k}" onclick="answer('${k}',event)">
+            <span class="k">${tf ? (k === "T" ? "✓" : "✕") : k}</span>${esc(text)}
+            ${alt && !tf ? `<span class="oh">${esc(alt[n + 1])}</span>` : ""}
+          </button>`).join("");
 
   app.innerHTML = `
     <div class="lessonTop">
@@ -457,26 +502,40 @@ function renderQ() {
         <span class="tg">${q.p} pkt</span>
         ${exam ? "" : `<span class="tg">${esc((TOPICS.find(t => t.id === q.t) || {}).name || "")}</span>`}
       </div>
-      ${mediaHTML(q)}
+      ${media}
       <p class="qtext">${esc(q.pl[0])}</p>
       ${alt ? `<p class="qhint">${esc(alt[0])}</p>` : ""}
-      <div id="opts" style="margin-top:16px">
-        ${reading
-      ? `<button class="btn blue" onclick="toAnswer()">Gotów — pokaż odpowiedzi</button>`
-      : opts.map(([k, text], n) => `
-            <button class="opt" id="o${k}" onclick="answer('${k}',event)">
-              <span class="k">${tf ? (k === "T" ? "✓" : "✕") : k}</span>${esc(text)}
-              ${alt && !tf ? `<span class="oh">${esc(alt[n + 1])}</span>` : ""}
-            </button>`).join("")}
-      </div>
+      <div id="opts" style="margin-top:16px">${bottom}</div>
     </div>
     <div class="verdict" id="verdict"><div class="in">
       <div class="msg"><b id="vt"></b><span id="vs"></span></div>
       <button class="btn" id="vb" onclick="next()">Dalej</button>
     </div></div>`;
 
-  if (exam) startClock(reading ? EXAM.readSec : (q.s === "b" ? EXAM.answerSec : EXAM.specSec),
-    reading ? toAnswer : () => answer(null));
+  if (!exam) return;
+  if (phase === "read") startClock(EXAM.readSec, startMedia);
+  else if (phase === "film") {
+    const v = $("med");
+    $("clock").textContent = "▶";                       // время фильма не тикает
+    if (!v) return toAnswer();                          // видео не загрузилось — не наказываем
+    v.addEventListener("ended", toAnswer, { once: true });
+    const p = v.play();
+    if (p && p.catch) p.catch(() => toAnswer());        // браузер не дал автозапуск
+    // Страховка от зависания: в этой фазе таймера нет, поэтому если фильм
+    // не доиграл (застрял, не подгрузился) — всё равно пускаем к ответу.
+    const limit = (isFinite(v.duration) && v.duration ? v.duration : 20) * 1000 + 5000;
+    S.filmGuard = setTimeout(() => { if (S.phase === "film") toAnswer(); }, limit);
+  } else {
+    startClock(q.s === "b" ? EXAM.answerSec : EXAM.specSec, () => answer(null));
+  }
+}
+
+// START на ознакомлении: у фильма — крутим его, у фото и текста — сразу к ответу
+function startMedia() {
+  clearTimer();
+  const q = S.qs[S.i];
+  S.phase = q.k === "v" ? "film" : "answer";
+  renderQ();
 }
 
 function startClock(sec, onEnd) {
@@ -490,10 +549,9 @@ function startClock(sec, onEnd) {
 }
 
 function toAnswer() {
-  clearTimer(); S.phase = "answer";
-  const q = S.qs[S.i];
+  clearTimer();
+  S.phase = "answer";
   renderQ();
-  if (q.s === "b") { const v = $("med"); if (v) v.pause(); }
 }
 
 function answer(choice, ev) {
@@ -538,7 +596,7 @@ function answer(choice, ev) {
   $("vb").focus();
 }
 
-const next = () => { S.i++; renderQ(); };
+const next = () => { S.i++; S.phase = "read"; renderQ(); };
 const quit = () => {
   clearTimer();
   if (S.mode === "exam" && S.i < S.qs.length && !confirm("Przerwać egzamin?")) return;
