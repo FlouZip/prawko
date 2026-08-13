@@ -1,0 +1,15 @@
+{
+  "name": "Prawko — testy kat. B",
+  "short_name": "Prawko",
+  "description": "Testy na prawo jazdy kategorii B na oficjalnej bazie pytań Ministerstwa Infrastruktury",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0c12",
+  "theme_color": "#0a0c12",
+  "lang": "pl",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
